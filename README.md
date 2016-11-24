@@ -1,7 +1,5 @@
 A server that relays gopher content over HTTP, written in C without
-using the standard C library.
-
-This is mainly for personal usage at
+using the standard C library. This is mainly for personal usage at
 [my gopherspace](http://weeb.ddns.net/).
 
 At the moment, only remote gopher servers are supported, but I'm
