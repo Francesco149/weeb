@@ -19,7 +19,7 @@ $ xdg-open http://localhost:8080/
 $ killall weeb
 ```
 
-# How to use (Linux 32-bit)
+# How to use (Linux 64-bit)
 ```
 $ git clone https://github.com/Francesco149/weeb.git
 $ cd weeb
