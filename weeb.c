@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1"
+#define WEEB_VER "weeb 0.1.1"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1255,7 +1255,7 @@ typedef struct
     int cssfd;
 
     /* a file descriptor to a html file that will be appended right
-       after <body>. set to -1 to leave the header blank */
+       after <body>. set to -1 for the default gopher notice */
     int headerfd;
 
     /* this will be the title of the page. set to zero to omit the
@@ -1493,12 +1493,24 @@ b32 gophermap_to_html(
         "</head>"
         "<body>");
 
+    n = -1;
+
     if (i->headerfd != -1)
     {
         n = fcpy(fd, i->headerfd, (u8*)buf, bufsize);
         if (n < 0) {
             fputs(stderr, "fcpy failed for header");
         }
+    }
+
+    if (n < 0)
+    {
+        fputs(fd,
+            "Hello there! You are currently visiting gopherspace "
+            "through a<br />proxy. To learn more about gopher and "
+            "how to browse it, read "
+            "<a href=\"http://weeb.ddns.net/1/gopher\">this</a>."
+            "<br /><br />");
     }
 
     strcpy(buf, i->line_prefix);
