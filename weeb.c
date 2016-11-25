@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.1"
+#define WEEB_VER "weeb 0.1.2"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -23,6 +23,11 @@
 #define WEEB_GOPHER_PROXY  "gopher.floodgap.com/gopher/gw?a="
 
 /* ------------------------------------------------------------- */
+
+#ifdef WEEB_NOCACHE
+#undef WEEB_CACHE_LIFE
+#define WEEB_CACHE_LIFE 0
+#endif
 
 typedef intptr syscall_t;
 
@@ -1510,7 +1515,8 @@ b32 gophermap_to_html(
             "through a<br />proxy. To learn more about gopher and "
             "how to browse it, read "
             "<a href=\"http://weeb.ddns.net/1/gopher\">this</a>."
-            "<br /><br />");
+            "<br />______________________________________________"
+            "________________________<br /><br />");
     }
 
     strcpy(buf, i->line_prefix);
