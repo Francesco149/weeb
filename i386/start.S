@@ -34,12 +34,19 @@
 
         pop esi
         mov ecx,esp
+
+        /* 16-byte stack alignment is not mandatory here but
+           according to glibc it improves SSE performance */
         and esp,-16
 
+        /* push garbage to align to 16 bytes */
+        push 0xb16b00b5
+        push 0xb16b00b5
         push ecx
         push esi
         call main
-        add esp,8
+        add esp,16
+        /* on i386 it's up to the caller to clean up the stack */
 
         mov ebx,eax
         mov eax,SYS_exit

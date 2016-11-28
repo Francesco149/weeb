@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.2"
+#define WEEB_VER "weeb 0.1.3"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1667,7 +1667,10 @@ void weeb_get_cache(
 
 /* if force is true, it will open the file even if it's outdated */
 internal
-int weeb_open_cache(char const* cache_filename, b32 force)
+int weeb_open_cache(
+    char const* cache_filename,
+    uintptr* size,
+    b32 force)
 {
     char itoabuf[24];
     int cachefd = -1;
@@ -1705,6 +1708,10 @@ int weeb_open_cache(char const* cache_filename, b32 force)
     if (cachefd < 0) {
        prln("Failed to open cache file, recaching");
        return -1;
+    }
+
+    if (size) {
+        *size = si_gopher.size;
     }
 
     return cachefd;
@@ -1752,6 +1759,7 @@ int weeb_handle(int fd, sockaddr_in const* addr)
 
     char cache_filename[PATH_MAX];
     int cachefd;
+    uintptr cache_file_size = 0;
     char type = '1';
     char* selector = "/";
 
@@ -1848,9 +1856,9 @@ sendcode:
         http_line(fd, mime_type);
     }
 
-    http_body(fd);
-
-    if (code != 200) {
+    if (code != 200)
+    {
+        http_body(fd);
         /* this is a http error. there is no body */
         return 0;
     }
@@ -1859,7 +1867,8 @@ sendcode:
 
     /* get cached file or re-cache page */
     weeb_get_cache(selector, type, cache_filename);
-    cachefd = weeb_open_cache(cache_filename, 0);
+    cache_file_size = 0;
+    cachefd = weeb_open_cache(cache_filename, &cache_file_size, 0);
     if (cachefd < 0)
     {
         char cache_filename_tmp[PATH_MAX];
@@ -1910,11 +1919,17 @@ sendcode:
                 errln("rename failed");
             }
 
-            cachefd = weeb_open_cache(cache_filename, 1);
+            cache_file_size = 0;
+            cachefd = weeb_open_cache(
+                cache_filename,
+                &cache_file_size,
+                1
+            );
             if (cachefd < 0)
             {
                 errln("failed to open cache file after rename???");
                 cachefd = fd;
+                http_body(fd);
                 fputs(fd, "*** I/O ERROR, try again later ***");
             }
         }
@@ -1933,6 +1948,15 @@ sendcode:
        to the client */
 
     prln("Sending cached page...");
+
+    if (cache_file_size)
+    {
+        char itoabuf[24];
+        uitoa(10, cache_file_size, itoabuf, 0, '0');
+        fputs(fd, "Content-Length: ");
+        http_line(fd, itoabuf);
+    }
+    http_body(fd);
 
     if (fcpy(fd, cachefd, (u8*)buf, sizeof(buf)) < 0) {
         fputs(fd, "*** I/O ERROR, try again later ***");
