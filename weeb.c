@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.3"
+#define WEEB_VER "weeb 0.1.4"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1046,27 +1046,15 @@ int http_parse_request(
     intptr n;
     char* p = buf;
 
-    /* read first line of the request */
-    while (1)
-    {
-        if (p - buf >= bufsize - 1) {
-            *p = 0;
-            return REQ_TOOBIG;
-        }
-
-        n = read(fd, p, 1);
-        if (n <= 0 || *p == '\n' || *p == '\r') {
-            break;
-        }
-
-        ++p;
+    /* consume entire request */
+    n = read(fd, buf, bufsize);
+    if (n >= bufsize) {
+        return REQ_TOOBIG;
     }
-
-    *p = 0;
-
-    if (p == buf) {
+    if (n <= 0) {
         return REQ_EMPTY;
     }
+    buf[n - 1] = 0;
 
     p = buf;
 
