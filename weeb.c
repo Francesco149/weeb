@@ -1751,7 +1751,7 @@ void print_sockaddr(sockaddr_in const* addr)
 internal
 int weeb_handle(int fd, sockaddr_in const* addr)
 {
-    char buf[512];
+    char buf[8000];
 
     http_request req;
     char const* mime_type = "text/plain";
