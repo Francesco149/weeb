@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.4"
+#define WEEB_VER "weeb 0.1.5"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1877,6 +1877,7 @@ sendcode:
 
         if (cachefd < 0)
         {
+            http_body(fd);
             errln("Failed to create new cache file, falling back"
                   " to direct output. THIS IS BAD, PLS FIX");
             cachefd = fd;
@@ -1917,6 +1918,7 @@ sendcode:
             {
                 errln("failed to open cache file after rename???");
                 cachefd = fd;
+
                 http_body(fd);
                 fputs(fd, "*** I/O ERROR, try again later ***");
             }
@@ -1924,7 +1926,7 @@ sendcode:
     }
 
     /* we are in direct output fallback mode, so we already sent
-       the page to the client */
+       the page to the client, or an error occurred */
     if (cachefd == fd) {
         return 0;
     }
