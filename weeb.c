@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.8"
+#define WEEB_VER "weeb 0.1.9"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1327,7 +1327,9 @@ void gophermap_line_to_html(
 
         default:
         {
-            b32 same_host, external;
+            /* TODO: split this mess into multiple cases at the
+                     cost of code redundancy */
+            b32 same_host, external, is_http_url;
             cstr npath[PATH_MAX_LEVEL], nroot[PATH_MAX_LEVEL];
 
             pathn(ln.path, npath, PATH_MAX_LEVEL);
@@ -1359,6 +1361,11 @@ void gophermap_line_to_html(
 
             fputs(fd, "href=\"");
 
+            is_http_url = strneq(ln.path, "URL:", 4);
+            if (is_http_url) {
+                goto skip_external;
+            }
+
             if (protocol)
             {
                 fputs(fd, protocol);
@@ -1382,7 +1389,8 @@ void gophermap_line_to_html(
                 fputhtmlprop(fd, ln.port);
             }
 
-            if (strneq(ln.path, "URL:", 4)) {
+skip_external:
+            if (is_http_url) {
                 fputhtmlprop(fd, ln.path + 4);
             }
             else if (!protocol)
