@@ -63,7 +63,8 @@ typedef i32 b32;
 #define internal static
 #define globvar static
 
-#define EIO 5
+#define EIO    5
+#define ECHILD 10
 
 internal
 void memeset(void* dst, u8 value, intptr nbytes)
@@ -1883,13 +1884,11 @@ sendcode:
     weeb_get_cache(selector, type, cache_filename);
     cache_file_size = 0;
     cachefd = weeb_open_cache(cache_filename, &cache_file_size, 0);
-    if (cachefd < 0)
+    if (cachefd < 0 || !cache_file_size)
     {
         timespec ts = {0};
         char cache_filename_tmp[PATH_MAX + 60];
         char* t = cache_filename_tmp;
-
-        /* no cache file, let's create it */
 
         /* write to a temporary file so we don't risk sending a
            partial file + we keep the old copy if it fails */
@@ -1900,6 +1899,16 @@ sendcode:
         t += uitoa(10, (uintptr)ts.nsec, t, 0, '0');
 
         strcpy(t, ".tmp");
+
+        /* empty or no cache file, let's create it */
+        if (cachefd > 0)
+        {
+            prln("W: ");
+            prln(cache_filename_tmp);
+            prln(" is empty, recaching");
+            close(cachefd);
+            cachefd = -1;
+        }
 
         cachefd = open(
             cache_filename_tmp,
@@ -2107,6 +2116,10 @@ int weeb(int argc, char const* argv[])
         /* parent process keeps on accepting new connections */
     }
 
+    prln("Waiting for all children to finish...");
+    while(waitpid(-1, 0, WNOHANG) != -ECHILD);
+
     close(sockfd);
+
     return 0;
 }
