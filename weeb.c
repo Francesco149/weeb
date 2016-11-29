@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.6"
+#define WEEB_VER "weeb 0.1.7"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1846,6 +1846,8 @@ sendcode:
 
         fputs(fd, "Content-Type: ");
         http_line(fd, mime_type);
+
+        http_line(fd, "Content-Encoding: identity");
     }
 
     if (code != 200)
