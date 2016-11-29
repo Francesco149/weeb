@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.7"
+#define WEEB_VER "weeb 0.1.8"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -473,6 +473,15 @@ typedef struct
     syscall_slong_t nsec;
 }
 timespec;
+
+#define CLOCK_REALTIME 0
+
+internal
+int clock_gettime(u32 clock_id, timespec* ts)
+{
+    return (int)(intptr)
+        syscall2(SYS_clock_gettime, (void*)(intptr)clock_id, ts);
+}
 
 #define AT_FDCWD -100
 
@@ -1074,6 +1083,9 @@ int http_parse_request(
     for (; *p != ' ' && *p; ++p);
     if (!*p) {
         return REQ_INVALID;
+    }
+    if (p - res->path >= PATH_MAX) {
+        return REQ_TOOBIG;
     }
 
     *p++ = 0;
@@ -1865,7 +1877,8 @@ sendcode:
     cachefd = weeb_open_cache(cache_filename, &cache_file_size, 0);
     if (cachefd < 0)
     {
-        char cache_filename_tmp[PATH_MAX];
+        timespec ts = {0};
+        char cache_filename_tmp[PATH_MAX + 60];
         char* t = cache_filename_tmp;
 
         /* no cache file, let's create it */
@@ -1873,6 +1886,11 @@ sendcode:
         /* write to a temporary file so we don't risk sending a
            partial file + we keep the old copy if it fails */
         t += strcpy(t, cache_filename);
+
+        clock_gettime(CLOCK_REALTIME, &ts);
+        t += uitoa(10, (uintptr)ts.sec, t, 0, '0');
+        t += uitoa(10, (uintptr)ts.nsec, t, 0, '0');
+
         strcpy(t, ".tmp");
 
         cachefd = open(
@@ -1912,6 +1930,10 @@ sendcode:
         if (cachefd != fd)
         {
             close(cachefd);
+
+            puts(cache_filename_tmp);
+            puts(" -> ");
+            prln(cache_filename);
 
             if (rename(cache_filename_tmp, cache_filename) < 0) {
                 errln("rename failed");

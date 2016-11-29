@@ -29,4 +29,5 @@
 #define SYS_wait4           61
 #define SYS_rename          82
 #define SYS_mkdir           83
+#define SYS_clock_gettime   228
 #define SYS_utimensat       280
