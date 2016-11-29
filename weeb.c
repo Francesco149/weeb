@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.5"
+#define WEEB_VER "weeb 0.1.6"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -1754,6 +1754,7 @@ int weeb_handle(int fd, sockaddr_in const* addr)
     u8 gopherip[4] = WEEB_GOPHER_IP;
     u32 gopherip_u32;
     b32 invalidate_cache = 0;
+    b32 is_head = 0;
 
     /* --------------------------------------------------------- */
 
@@ -1784,7 +1785,10 @@ int weeb_handle(int fd, sockaddr_in const* addr)
     puts(" ");
     prln(req.path);
 
-    if (!streq(req.method, "GET")) {
+    is_head = streq(req.method, "HEAD");
+
+    if (!streq(req.method, "GET") && !is_head)
+    {
         errln("Unimplemented method");
         code = 501;
     }
@@ -1890,15 +1894,18 @@ sendcode:
         /* ! NOTE: p, buf and all pointers to it are
                    invalidated from here ! */
 
-        invalidate_cache =
-            !weeb_scrape_gopher(
-                cachefd,
-                gopherip_u32,
-                selector,
-                type,
-                buf,
-                sizeof(buf)
-            );
+        if (!is_head)
+        {
+            invalidate_cache =
+                !weeb_scrape_gopher(
+                    cachefd,
+                    gopherip_u32,
+                    selector,
+                    type,
+                    buf,
+                    sizeof(buf)
+                );
+        }
 
         if (cachefd != fd)
         {
@@ -1920,9 +1927,15 @@ sendcode:
                 cachefd = fd;
 
                 http_body(fd);
-                fputs(fd, "*** I/O ERROR, try again later ***");
+
+                if (!is_head) {
+                    fputs(
+                        fd,
+                        "*** I/O ERROR, try again later ***"
+                    );
+                }
             }
-        }
+        } /* TODO: reduce nesting here */
     }
 
     /* we are in direct output fallback mode, so we already sent
@@ -1946,9 +1959,11 @@ sendcode:
         fputs(fd, "Content-Length: ");
         http_line(fd, itoabuf);
     }
+
     http_body(fd);
 
-    if (fcpy(fd, cachefd, (u8*)buf, sizeof(buf)) < 0) {
+    if (!is_head && fcpy(fd, cachefd, (u8*)buf, sizeof(buf)) < 0)
+    {
         fputs(fd, "*** I/O ERROR, try again later ***");
     }
 
