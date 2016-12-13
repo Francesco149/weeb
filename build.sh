@@ -10,24 +10,24 @@
 #   This file is part of "weeb", a http mirror for gopherspace
 #   written in C without the standard C library.
 
-exename=weeb
+exename="weeb"
+archname=${1:-amd64}
 
-gcc \
-    i386/start.S i386/main.c \
-    -m32 -std=c89 -pedantic -O2 \
-    -Wall -Werror -Wno-long-long \
-    -fdata-sections \
-    -fno-stack-protector \
-    -Wl,--gc-sections \
+if [ -e $archname/flags.sh ]; then
+    source $archname/flags.sh
+fi
+
+gcc -std=c89 -pedantic -s -O2 -Wall -Werror \
+    -nostdlib \
     -fno-unwind-tables \
     -fno-asynchronous-unwind-tables \
+    -fdata-sections \
+    -Wl,--gc-sections \
     -Wa,--noexecstack \
     -fno-builtin \
-    -nostdlib \
+    -fno-stack-protector \
+    $COMPILER_FLAGS \
+    $archname/start.S $archname/main.c \
     -o $exename \
 \
-&& strip \
-    -R .eh_frame \
-    -R .eh_frame_hdr \
-    -R .comment \
-    $exename
+&& strip -R .comment $exename

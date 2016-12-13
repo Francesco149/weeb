@@ -12,8 +12,8 @@ if you don't have them already.
 ```
 $ git clone https://github.com/Francesco149/weeb.git
 $ cd weeb
-$ chmod +x ./i386build.sh
-$ ./i386build.sh
+$ chmod +x ./build.sh
+$ ./build.sh i386
 $ ./weeb &
 $ xdg-open http://localhost:8080/
 $ killall weeb
@@ -23,8 +23,8 @@ $ killall weeb
 ```
 $ git clone https://github.com/Francesco149/weeb.git
 $ cd weeb
-$ chmod +x ./amd64build.sh
-$ ./amd64build.sh
+$ chmod +x ./build.sh
+$ ./build.sh
 $ ./weeb &
 $ xdg-open http://localhost:8080/
 $ killall weeb
