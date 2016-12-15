@@ -17,6 +17,7 @@
 #define SYS_stat            4
 #define SYS_rt_sigaction    13
 #define STUB_rt_sigreturn   15
+#define SYS_getpid          39
 #define SYS_socket          41
 #define SYS_connect         42
 #define SYS_accept          43

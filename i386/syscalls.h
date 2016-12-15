@@ -16,6 +16,7 @@
 #define SYS_close           6
 #define SYS_stat            106
 #define SYS_rt_sigaction    174
+#define SYS_getpid          20
 #define SYS_socketcall      102
 #define SYS_fork            2
 #define SYS_exit            1

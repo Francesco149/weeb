@@ -10,17 +10,20 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.10"
+#define WEEB_VER "weeb 1.2.0"
 
-#define WEEB_TIMEOUT       30 /* seconds */
+#define WEEB_TIMEOUT       10 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
 #define WEEB_CACHE_LIFE    (60 * 60) /* seconds */
 
 #define WEEB_TITLE         "Franc[e]sco's Gopherspace"
 #define WEEB_GOPHER_DOMAIN "sdf.org"
-#define WEEB_GOPHER_IP     {205, 166, 94, 15} /* sdf.org's ip */
+#define WEEB_GOPHER_IP     { 205, 166, 94, 15 } /* if dns fails */
 #define WEEB_GOPHER_ROOT   "/users/loli"
 #define WEEB_GOPHER_PROXY  "gopher.floodgap.com/gopher/gw?a="
+
+#define DNS_SERVER 0x08080808 /* in big endian */
+#define DNS_PORT 53
 
 /* ------------------------------------------------------------- */
 
@@ -96,9 +99,9 @@ void memeset(void* dst, u8 value, intptr nbytes)
 }
 
 internal
-void memecpy(void* dst, void const* src, intptr nbytes)
+uintptr memecpy(void* dst, void const* src, uintptr nbytes)
 {
-    intptr i = 0;
+    uintptr i = 0;
 
     if (nbytes % sizeof(intptr) == 0)
     {
@@ -118,6 +121,8 @@ void memecpy(void* dst, void const* src, intptr nbytes)
             dst_bytes[i] = src_bytes[i];
         }
     }
+
+    return nbytes;
 }
 
 internal
@@ -163,7 +168,7 @@ b32 isws(char const* s)
 }
 
 internal
-intptr strlen(char const* str)
+uintptr strlen(char const* str)
 {
     char const* p;
     for(p = str; *p; ++p);
@@ -171,7 +176,7 @@ intptr strlen(char const* str)
 }
 
 internal
-intptr strcpy(char* dst, char const* src)
+uintptr strcpy(char* dst, char const* src)
 {
     intptr srclen = strlen(src);
     memecpy(dst, src, srclen);
@@ -427,6 +432,11 @@ int signal(i32 signum, sighandler* handler, sighandler** prev)
     return res;
 }
 
+internal
+int getpid() {
+    return (int)(intptr)syscall(SYS_getpid);
+}
+
 #define stdout 1
 #define stderr 2
 
@@ -635,8 +645,7 @@ void mkdir_p(char const* path, mode_t mode, intptr nstrip)
 
     for (p = npath; p->p; ++p)
     {
-        memecpy(t, p->p, p->len);
-        t += p->len;
+        t += memecpy(t, p->p, p->len);
         *t = 0;
 
         mkdir(tmp, mode);
@@ -712,21 +721,24 @@ intptr errln_impl(char const* func, char const* msg)
 /* ------------------------------------------------------------- */
 
 #define AF_INET 2
-#define SOCK_STREAM 1
 
+#define SOCK_STREAM 1
+#define SOCK_DGRAM 2
+
+#define IPPROTO_UDP 17
 #define IPPROTO_TCP 6
 
 typedef struct
 {
     u16 family;
-    u16 port; /* NOTE: this is big endian!!!!!!! use letobe16u */
+    u16 port; /* NOTE: this is big endian!!!!!!! use flip16u */
     u32 addr;
     u8  zero[8];
 }
 sockaddr_in;
 
 internal
-u16 letobe16u(u16 v) {
+u16 flip16u(u16 v) {
     return (v << 8) | (v >> 8);
 }
 
@@ -915,12 +927,446 @@ int setsockopt(
 
 /* ------------------------------------------------------------- */
 
+#ifndef WEEB_NODNS
+/* primitive encoding functions used to build the DNS packets.
+   this is all big endian */
+
+internal
+uintptr encode2(u8* p, u16 v)
+{
+    u8 const* s = p;
+    *p++ = (u8)(v >> 8);
+    *p++ = (u8)(v & 0x00FF);
+    return p - s;
+}
+
+internal
+uintptr decode2(u8 const* p, u16* v)
+{
+    u8 const* s = p;
+    *v = *p++ << 8;
+    *v |= *p++;
+    return p - s;
+}
+
+internal
+uintptr decode4(u8 const* p, u32* v)
+{
+    u8 const* s = p;
+    p += decode2(p, (u16*)v + 1);
+    p += decode2(p, (u16*)v);
+    return p - s;
+}
+
+#define MAX_STR 63
+
+/* len will be truncated to MAX_STR if higher */
+internal
+uintptr encode_str(u8* p, char const* str, u8 len)
+{
+    u8 const* s = p;
+    len &= MAX_STR;
+
+    *p++ = len;
+
+    for (; len; --len) {
+        *p++ = (u8)*str++;
+    }
+
+    return p - s;
+}
+
+internal
+uintptr decode_str(u8 const* p, char* str)
+{
+    u8 const* s = p;
+    u8 len = *p++;
+
+    for (; len; --len) {
+        *str++ = (char)*p++;
+    }
+
+    *str++ = 0;
+
+    return p - s;
+}
+
+/* ------------------------------------------------------------- */
+
+#define RCODE_OK       0
+
+/*
+    Section 4.1.3 of https://www.ietf.org/rfc/rfc1035.txt
+
+                                    1  1  1  1  1  1
+      0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                      ID                       |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |QR|   Opcode  |AA|TC|RD|RA|   Z    |   RCODE   | <- mask
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                    QDCOUNT                    |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                    ANCOUNT                    |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                    NSCOUNT                    |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                    ARCOUNT                    |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*/
+
+#define QR_QUERY       0x0000
+#define QR_RESP        0x8000 /* 1 0000 0 0 0 0 000 0000 */
+#define OPCODE_QUERY   0x0000
+#define OPCODE_STATUS  0x1000 /* 0 0010 0 0 0 0 000 0000 */
+#define DNS_RD         0x0100 /* 0 0000 0 0 1 0 000 0000 */
+#define DNS_AA         0x0400 /* 0 0000 1 0 0 0 000 0000 */
+#define RCODE_MASK     0x000F /* 0 0000 0 0 0 0 000 1111 */
+
+typedef struct
+{
+    u16 id;
+    u16 mask;
+    u16 qd_count;
+    u16 an_count;
+    u16 ns_count;
+    u16 ar_count;
+}
+dns_hdr;
+
+internal
+uintptr encode_dns_hdr(u8* p, dns_hdr const* hdr)
+{
+    u8 const* s = p;
+
+    p += encode2(p, hdr->id);
+    p += encode2(p, hdr->mask);
+    p += encode2(p, hdr->qd_count);
+    p += encode2(p, hdr->an_count);
+    p += encode2(p, hdr->ns_count);
+    p += encode2(p, hdr->ar_count);
+
+    return p - s;
+}
+
+internal
+uintptr decode_dns_hdr(u8 const* p, dns_hdr* hdr)
+{
+    u8 const* s = p;
+
+    p += decode2(p, &hdr->id);
+    p += decode2(p, &hdr->mask);
+    p += decode2(p, &hdr->qd_count);
+    p += decode2(p, &hdr->an_count);
+    p += decode2(p, &hdr->ns_count);
+    p += decode2(p, &hdr->ar_count);
+
+    return p - s;
+}
+
+/* qname is expected to not exceed MAX_HOST - 1 length */
+internal
+uintptr encode_name(u8* p, char const* qname)
+{
+    u8 const* s = p;
+    char const* label = qname;
+
+    for (; 1; ++label)
+    {
+        char c = *label;
+
+        if (c != '.' && c) {
+            continue;
+        }
+
+        p += encode_str(p, qname, label - qname);
+        qname = label + 1;
+
+        if (!c) {
+            break;
+        }
+    }
+
+    *p++ = 0;
+
+    return p - s;
+}
+
+/*
+    Section 4.1.4 of https://www.ietf.org/rfc/rfc1035.txt
+
+    To avoid duplicate strings, an entire domain name or a list of
+    labels at the end of a domain name is replaced with a pointer
+    to a prior occurance of the same name.
+
+    The pointer takes the form of a two octet sequence:
+
+        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+        | 1  1|                OFFSET                   |
+        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    The first two bits are ones. This allows a pointer to be
+    distinguished from a label, since the label must begin with two
+    zero bits because labels are restricted to 63 octets or less.
+*/
+
+#define MAX_HOST 0xFF
+#define STR_POINTER 0xC0
+
+/* qname is expected to be of size MAX_HOST */
+internal
+uintptr decode_name(u8 const* p, char* qname, u8 const* data_begin)
+{
+    u8 const* s = p;
+
+    if ((*p & STR_POINTER) == STR_POINTER)
+    {
+        /* a pointer basically redirects the parsing of the entire
+           name to another location in the packet */
+        u16 offset;
+        p += decode2(p, &offset);
+        offset &= ~(STR_POINTER << 8);
+        decode_name(data_begin + offset, qname, data_begin);
+        return p - s;
+    }
+
+    while (p - s + *p < MAX_HOST - 1)
+    {
+        p += decode_str(p, qname);
+        if (!*p) {
+            break;
+        }
+
+        for (; *qname; ++qname);
+        *qname++ = '.';
+    }
+
+    for (; *p; ++p); /* skip rest in case of truncation */
+
+    return ++p - s;
+}
+
+#define TYPE_A 1
+#define CLASS_IN 1
+
+internal
+uintptr encode_dns_question(
+    u8* p,
+    char const* qname,
+    u16 qtype,
+    u16 qclass)
+{
+    u8 const* s = p;
+
+    p += encode_name(p, qname);
+    p += encode2(p, qtype);
+    p += encode2(p, qclass);
+
+    return p - s;
+}
+
+/* qname is expected to be of size MAX_HOST */
+internal
+uintptr decode_dns_question(
+    u8 const* p,
+    char* qname,
+    u16* qtype,
+    u16* qclass,
+    u8 const* data_begin)
+{
+    u8 const* s = p;
+
+    p += decode_name(p, qname, data_begin);
+    p += decode2(p, qtype);
+    p += decode2(p, qclass);
+
+    return p - s;
+}
+
+typedef struct
+{
+    char* name;
+    u16 type;
+    u16 class;
+    u32 ttl;
+    u16 rd_length;
+    void const* data;
+}
+dns_resource;
+
+/* res->name is expected to be set to a buffer of size MAX_HOST.
+   res->data will point to data in p, and will only be valid as
+   long as p is valid */
+internal
+uintptr decode_dns_resource(
+    u8 const* p,
+    dns_resource* res,
+    u8 const* data_begin)
+{
+    u8 const* s = p;
+
+    p += decode_dns_question(
+        p,
+        res->name,
+        &res->type,
+        &res->class,
+        data_begin
+    );
+
+    p += decode4(p, &res->ttl);
+    p += decode2(p, &res->rd_length);
+
+    res->data = p;
+    p += res->rd_length;
+
+    return p - s;
+}
+
+/* ------------------------------------------------------------- */
+
+internal
+int dns_dial(u32 ip)
+{
+    int fd, err;
+    sockaddr_in a;
+
+    memeset(&a, 0, sizeof(sockaddr_in));
+    a.family = AF_INET;
+    a.port = flip16u(DNS_PORT);
+    a.addr = ip;
+
+    fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+        return fd;
+    }
+
+    err = connect(fd, &a);
+    if (err < 0) {
+        close(fd);
+        return err;
+    }
+
+    return fd;
+}
+
+#define DNS_BUFSIZE 0xFFFF
+
+/* returns a big endian ip */
+internal
+u32 dns_query(char const* host)
+{
+    u32 res = 0;
+    b32 socket_error = 0;
+
+    int fd;
+
+    /* query and response */
+    u8 buf[DNS_BUFSIZE];
+    u8* p;
+    dns_hdr hdr;
+
+    /* response */
+    char namebuf[MAX_HOST];
+    u16 qtype, qclass;
+    u16 i;
+
+    /* ----------------------------------------------------- */
+
+    fd = dns_dial(DNS_SERVER);
+    if (fd < 0) {
+        return 0;
+    }
+
+    memeset(&hdr, 0, sizeof(dns_hdr));
+    hdr.id = (u16)getpid();
+    hdr.mask = QR_QUERY | OPCODE_QUERY | DNS_RD;
+    hdr.qd_count = 1;
+
+    p = buf;
+    p += encode_dns_hdr(p, &hdr);
+    p += encode_dns_question(p, host, TYPE_A, CLASS_IN);
+
+    if (write(fd, buf, p - buf) != p - buf) {
+        socket_error = 1;
+    }
+
+    else if (read(fd, buf, DNS_BUFSIZE) < 0) {
+        socket_error = 1;
+    }
+
+    close(fd);
+
+    if (socket_error) {
+        return 0;
+    }
+
+    /* ----------------------------------------------------- */
+
+    p = buf;
+    p += decode_dns_hdr(p, &hdr);
+
+    if (hdr.id != getpid()) {
+        return 0;
+    }
+
+    if (!(hdr.mask & QR_RESP)) {
+        return 0;
+    }
+
+    if ((hdr.mask & RCODE_MASK) != RCODE_OK) {
+        return 0;
+    }
+
+    if (hdr.qd_count != 1) {
+        return 0;
+    }
+
+    p += decode_dns_question(p, namebuf, &qtype, &qclass, buf);
+
+    if (!streq(namebuf, host)) {
+        return 0;
+    }
+
+    if (qtype != TYPE_A) {
+        return 0;
+    }
+
+    if (qclass != CLASS_IN) {
+        return 0;
+    }
+
+    for (i = 0;
+         !res && i < hdr.an_count + hdr.ns_count + hdr.ar_count;
+         ++i)
+    {
+        dns_resource r;
+
+        r.name = namebuf;
+        p += decode_dns_resource(p, &r, buf);
+
+        if (!streq(r.name, host)) {
+            continue;
+        }
+
+        if (r.type != TYPE_A) {
+            continue;
+        }
+
+        memecpy(&res, r.data, r.rd_length);
+    }
+
+    return res;
+}
+#endif /* #ifndef WEEB_NODNS */
+
+/* ------------------------------------------------------------- */
+
 internal
 int tcp_init(sockaddr_in* serv_addr, u16 port)
 {
     memeset(serv_addr, 0, sizeof(sockaddr_in));
     serv_addr->family = AF_INET;
-    serv_addr->port = letobe16u(port);
+    serv_addr->port = flip16u(port);
 
     return socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 }
@@ -1773,7 +2219,7 @@ int weeb_handle(int fd, sockaddr_in const* addr)
     char* selector = "/";
 
     u8 gopherip[4] = WEEB_GOPHER_IP;
-    u32 gopherip_u32;
+    u32 gopherip_u32 = 0;
     b32 invalidate_cache = 0;
     b32 is_head = 0;
 
@@ -1939,9 +2385,19 @@ sendcode:
             cachefd = fd;
         }
 
-        /* can't use a normal cast for this in c89
-           so I'll memcpy the ip bytes into a u32 */
-        memecpy(&gopherip_u32, gopherip, sizeof(u32));
+#ifndef WEEB_NODNS
+        gopherip_u32 = dns_query(WEEB_GOPHER_DOMAIN);
+
+        if (!gopherip_u32)
+        {
+            errln("DNS failed, falling back to hardcoded ip");
+#else
+        {
+#endif
+            /* can't use a normal cast for this in c89
+               so I'll memcpy the ip bytes into a u32 */
+            memecpy(&gopherip_u32, gopherip, sizeof(u32));
+        }
 
         /* ! NOTE: p, buf and all pointers to it are
                    invalidated from here ! */
