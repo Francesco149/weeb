@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 0.1.9"
+#define WEEB_VER "weeb 0.1.10"
 
 #define WEEB_TIMEOUT       30 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -18,7 +18,7 @@
 
 #define WEEB_TITLE         "Franc[e]sco's Gopherspace"
 #define WEEB_GOPHER_DOMAIN "sdf.org"
-#define WEEB_GOPHER_IP     {192, 94, 73, 15} /* sdf.org's ip */
+#define WEEB_GOPHER_IP     {205, 166, 94, 15} /* sdf.org's ip */
 #define WEEB_GOPHER_ROOT   "/users/loli"
 #define WEEB_GOPHER_PROXY  "gopher.floodgap.com/gopher/gw?a="
 
@@ -1825,12 +1825,27 @@ int weeb_handle(int fd, sockaddr_in const* addr)
             ++selector;
         }
 
-        /* TODO: used pathp in here */
-        if (streq(selector, "favicon.ico"))
+        /* TODO: use pathp in here */
+        if (streq(selector, "favicon.ico") ||
+            streq(selector, "apple-touch-icon.png") ||
+            streq(selector, "apple-touch-icon-precomposed.png") ||
+            streq(
+                selector,
+                "apple-touch-icon-120x120-precomposed.png"
+            ) ||
+            streq(selector, "apple-touch-icon-152x152.png") ||
+            streq(
+                selector,
+                "apple-touch-icon-152x152-precomposed.png"
+            ) ||
+            streq(
+                selector,
+                "apple-touch-icon76x76.png"
+            ))
         {
             code = 404;
             prln("FUCK the favicon");
-            /* TODO: send favicon */
+            /* TODO: send blank favicon */
             goto sendcode;
         }
 
