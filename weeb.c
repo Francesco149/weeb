@@ -10,7 +10,7 @@
     written in C without the standard C library.
 */
 
-#define WEEB_VER "weeb 1.2.0"
+#define WEEB_VER "weeb 1.2.1"
 
 #define WEEB_TIMEOUT       10 /* seconds */
 #define WEEB_BACKLOG       10 /* max pending connections */
@@ -977,10 +977,27 @@ uintptr encode_str(u8* p, char const* str, u8 len)
 }
 
 internal
-uintptr decode_str(u8 const* p, char* str)
+uintptr decode_str(
+    u8 const* p,
+    char* str,
+    u8 const* data_end,
+    b32* trunc)
 {
     u8 const* s = p;
-    u8 len = *p++;
+    u8 len;
+
+    /* TODO: see if I can do bounds checking in a neater way */
+    if (p + 1 > data_end) {
+        *trunc = 1;
+        return p - s;
+    }
+
+    len = *p++;
+
+    if (p + len > data_end) {
+        *trunc = 1;
+        return p - s;
+    }
 
     for (; len; --len) {
         *str++ = (char)*p++;
@@ -1033,6 +1050,8 @@ typedef struct
     u16 ar_count;
 }
 dns_hdr;
+
+#define DNS_HDR_SIZE 12
 
 internal
 uintptr encode_dns_hdr(u8* p, dns_hdr const* hdr)
@@ -1115,24 +1134,51 @@ uintptr encode_name(u8* p, char const* qname)
 
 /* qname is expected to be of size MAX_HOST */
 internal
-uintptr decode_name(u8 const* p, char* qname, u8 const* data_begin)
+uintptr decode_name(
+    u8 const* p,
+    char* qname,
+    u8 const* data_begin,
+    u8 const* data_end,
+    b32* trunc)
 {
     u8 const* s = p;
+
+    if (p + 1 > data_end) {
+        *trunc = 1;
+        return p - s;
+    }
 
     if ((*p & STR_POINTER) == STR_POINTER)
     {
         /* a pointer basically redirects the parsing of the entire
            name to another location in the packet */
         u16 offset;
+
+        if (p + 2 > data_end) {
+            *trunc = 1;
+            return p - s;
+        }
+
         p += decode2(p, &offset);
         offset &= ~(STR_POINTER << 8);
-        decode_name(data_begin + offset, qname, data_begin);
+
+        decode_name(
+            data_begin + offset,
+            qname,
+            data_begin,
+            data_end,
+            trunc
+        );
+
         return p - s;
     }
 
     while (p - s + *p < MAX_HOST - 1)
     {
-        p += decode_str(p, qname);
+        p += decode_str(p, qname, data_end, trunc);
+        if (*trunc) {
+            return p - s;
+        }
         if (!*p) {
             break;
         }
@@ -1142,6 +1188,11 @@ uintptr decode_name(u8 const* p, char* qname, u8 const* data_begin)
     }
 
     for (; *p; ++p); /* skip rest in case of truncation */
+
+    if (p + 1 > data_end) {
+        *trunc = 1;
+        return p - s;
+    }
 
     return ++p - s;
 }
@@ -1172,11 +1223,23 @@ uintptr decode_dns_question(
     char* qname,
     u16* qtype,
     u16* qclass,
-    u8 const* data_begin)
+    u8 const* data_begin,
+    u8 const* data_end,
+    b32* trunc)
 {
     u8 const* s = p;
 
-    p += decode_name(p, qname, data_begin);
+    p += decode_name(p, qname, data_begin, data_end, trunc);
+
+    if (*trunc) {
+        return p - s;
+    }
+
+    if (p + 4 > data_end) {
+        *trunc = 1;
+        return p - s;
+    }
+
     p += decode2(p, qtype);
     p += decode2(p, qclass);
 
@@ -1201,7 +1264,9 @@ internal
 uintptr decode_dns_resource(
     u8 const* p,
     dns_resource* res,
-    u8 const* data_begin)
+    u8 const* data_begin,
+    u8 const* data_end,
+    b32* trunc)
 {
     u8 const* s = p;
 
@@ -1210,11 +1275,24 @@ uintptr decode_dns_resource(
         res->name,
         &res->type,
         &res->class,
-        data_begin
+        data_begin,
+        data_end,
+        trunc
     );
+    if (*trunc) {
+        return p - s;
+    }
+
+    if (p + 4 + 2 > data_end) {
+        return p - s;
+    }
 
     p += decode4(p, &res->ttl);
     p += decode2(p, &res->rd_length);
+
+    if (p + res->rd_length > data_end) {
+        return p - s;
+    }
 
     res->data = p;
     p += res->rd_length;
@@ -1259,9 +1337,11 @@ u32 dns_query(char const* host)
     b32 socket_error = 0;
 
     int fd;
+    intptr nread;
 
     /* query and response */
     u8 buf[DNS_BUFSIZE];
+    u8* end_of_buf;
     u8* p;
     dns_hdr hdr;
 
@@ -1269,6 +1349,8 @@ u32 dns_query(char const* host)
     char namebuf[MAX_HOST];
     u16 qtype, qclass;
     u16 i;
+
+    b32 trunc = 0;
 
     /* ----------------------------------------------------- */
 
@@ -1288,12 +1370,17 @@ u32 dns_query(char const* host)
 
     if (write(fd, buf, p - buf) != p - buf) {
         socket_error = 1;
+        goto cleanup;
     }
 
-    else if (read(fd, buf, DNS_BUFSIZE) < 0) {
+    nread = read(fd, buf, DNS_BUFSIZE);
+    if (nread <= 0) {
         socket_error = 1;
     }
 
+    end_of_buf = buf + nread;
+
+cleanup:
     close(fd);
 
     if (socket_error) {
@@ -1303,6 +1390,11 @@ u32 dns_query(char const* host)
     /* ----------------------------------------------------- */
 
     p = buf;
+
+    if (p + DNS_HDR_SIZE > end_of_buf) {
+        return 0;
+    }
+
     p += decode_dns_hdr(p, &hdr);
 
     if (hdr.id != getpid()) {
@@ -1321,7 +1413,18 @@ u32 dns_query(char const* host)
         return 0;
     }
 
-    p += decode_dns_question(p, namebuf, &qtype, &qclass, buf);
+    p += decode_dns_question(
+        p,
+        namebuf,
+        &qtype,
+        &qclass,
+        buf,
+        end_of_buf,
+        &trunc
+    );
+    if (trunc) {
+        return 0;
+    }
 
     if (!streq(namebuf, host)) {
         return 0;
@@ -1342,7 +1445,10 @@ u32 dns_query(char const* host)
         dns_resource r;
 
         r.name = namebuf;
-        p += decode_dns_resource(p, &r, buf);
+        p += decode_dns_resource(p, &r, buf, end_of_buf, &trunc);
+        if (trunc) {
+            return 0;
+        }
 
         if (!streq(r.name, host)) {
             continue;
